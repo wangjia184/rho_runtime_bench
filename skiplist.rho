@@ -1,0 +1,304 @@
+new TestAddRecord, 
+    TestSearchOneRecord, 
+    insertRegistry(`rho:registry:insertArbitraty`), 
+    lookupRegistry(`rho:registry:lookup`), 
+    stdout(`rho:io:stdout`),
+    //deployerId(`rho:rchain:deployerId`),
+    skiplist, addMember, searchMember, moveNextMember,
+    testAddRecordUriCh, testSearchOneRecordUriCh
+ in {
+
+    skiplist!( *addMember, *searchMember, *moveNextMember)  |
+    
+
+    contract TestAddRecord(@score, @value, ret) = {
+        addMember!(score, value, *ret)
+    }
+    |
+    insertRegistry!(bundle+{*TestAddRecord}, *testAddRecordUriCh)
+    |
+    contract TestSearchOneRecord(@score, ret) = {
+        new cb in {
+            searchMember!(score, *cb) |
+            for( @cursor <- cb){
+                if( cursor == Nil ){
+                    ret!(Nil)
+                } else {
+                    moveNextMember!(cursor, *ret)
+                }
+            }
+        }
+    }
+    |
+    insertRegistry!(bundle+{*TestSearchOneRecord}, *testSearchOneRecordUriCh)
+    |
+    for( @testAddRecordUri <- testAddRecordUriCh; @testSearchOneRecordUri <- testSearchOneRecordUriCh) {
+        stdout!([testAddRecordUri, testSearchOneRecordUri])
+    }
+    
+
+    |
+
+    // create a skiplist instance
+    contract skiplist(add, search, moveNext) = {
+        new headSlot /*first node in skiplist*/,
+            maxHeightCh /*max height of node*/,
+            countCh /* total size */,
+            queue, performOne,/* we only allow one update at a time, all updates are piped here */
+            createNode, internalAdd, insertNode,
+            randomCh, random, randomLevel, initRandomSeed,
+            enumerateLevel,findFurthestSlot,increaseHeight,searchLevel in {
+
+            maxHeightCh!(1) |
+            countCh!(0) |
+
+            // for write operations, we only allow one at a time
+            // hence update commands are piped in unordered `queue`
+            // and we process it one after another
+            contract performOne() = {
+                for(@cmd <- queue) {
+                    match cmd {
+                        ("add", score, value, return) => {
+                            new ret in {
+                                internalAdd!(score, value, *ret) |
+                                for( @result <- ret ){
+                                    performOne!() |
+                                    @return!(result)
+                                }
+                            }
+                            
+                        }
+                        _ => performOne!()
+                    }
+                }
+            }
+            |
+            performOne!()  
+            |
+            contract add(@score, @value, @return) = {
+                queue!( ("add", score, value, return) )
+            }
+            |
+            // init a seed for pseudo random
+            contract initRandomSeed(@byteArray, @idx, @x, return) = {
+                if( idx < byteArray.length() - 1 ) {
+                    initRandomSeed!( byteArray, idx+1, (byteArray.nth(idx) * (idx + x) + x) % 2147483648, *return)
+                } else {
+                    return!(x) |
+                    stdout!(["Random seed is ", x])
+                }
+            }
+            |
+            initRandomSeed!(*randomCh.toByteArray(), 0, 1, *randomCh)
+            |
+            // linear congruential generator
+            // f(x+1) = (a*f(x) + c) % mod
+            contract random(return) = {
+                for( @num <- randomCh ){
+                    // from glibc
+                    randomCh!( (1103515245*num + 12345) % 2147483648) |
+                    return!( (1103515245*num + 12345) % 2147483648)
+                }
+            }
+            |
+            // Returns a random level for the new skiplist node we are going to create.
+            // The return value of this function is between 1 and 32(both inclusive)
+            // with a powerlaw-alike distribution where higher
+            // levels are less likely to be returned.
+            contract randomLevel(@level, return) = {
+                new randCh in {
+                    random!(*randCh) |
+                    for( @rand <- randCh ){
+                        // max 2^32 should be suificient
+                        if( rand % 100 < 25 and level < 32 ){
+                            randomLevel!(level + 1, *return)
+                        } else {
+                            return!(level)
+                        }
+                    }
+                }
+            }
+            |
+            // create a node in skiplist
+            contract createNode(@height, @score, value, return) = {
+                return!({
+                    "s" : score,
+                    "h" : height,
+                    "l" : {}, // level
+                    "v" : *value
+                })
+            } | 
+            // create the head node
+            createNode!(1 /* height */, Nil/*score*/, Nil/*value*/, *headSlot) 
+            |
+            // enumerate from specific level to bottom, and find all slots before specific score
+            contract enumerateLevel(slot, @level, @score, @list, ret) = {
+                if(level > 0){
+                    //stdout!(*slot) |
+                    for( @node <<- slot){
+                        //stdout!(["enumerateLevel at level:", level, ",score:", score, ", ", node]) |
+                        new furthestSlotCh in {
+                            findFurthestSlot!(*slot, level, score, *furthestSlotCh)
+                            |
+                            for(@furthestSlot <- furthestSlotCh) {
+                                enumerateLevel!( furthestSlot, level-1, score, [furthestSlot] ++ list, *ret)
+                            }
+                        }
+                    }
+                } else {
+                    ret!(list)
+                }
+            }
+            |
+            // find the slot containing smallest node on current level but greater than target
+            contract findFurthestSlot( slot, @level, @score, ret) = {
+                for( @node <<- slot ){
+                    new nextSlotCh in {
+                        nextSlotCh!(node.get("l").get(level)) // try to get next slot on this level
+                        |
+                        for(@nextSlot <- nextSlotCh){
+                            if( nextSlot == Nil ){  // no next slot
+                                ret!(*slot)
+                            } else {
+                                for(@nextNode <<- @nextSlot) { // peek node in next slot
+                                    if( nextNode.get("s") > score ){
+                                        findFurthestSlot!(nextSlot, level, score, *ret)
+                                    } else { // next node's score is not greater
+                                        ret!(*slot)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            |
+            contract internalAdd(@score, value, return) = {
+                new slotsCh/* [slot1,slot2,slot3,...] collects slots to be updated */,
+                    levelCh, 
+                    newSlot in 
+                {
+                    //stdout!(["internalAdd(", score , ")"]) |
+                    randomLevel!(1, *levelCh) |
+                    for( @height <<- maxHeightCh ){
+                        //stdout!(["score=", score, ";height=", height]) |
+                        // first search slots right before the insertion points
+                        enumerateLevel!(*headSlot, height, score, [], *slotsCh)
+                        |
+                        for( @slots <- slotsCh; @level <- levelCh ) {
+                            //stdout!(["score=", score, ";slots=", slots]) |
+                            increaseHeight!(level, slots, *slotsCh) |
+                            createNode!(level, score, *value, *newSlot) |
+                            for( @slots <- slotsCh; @newNode <- newSlot ) {
+                                // at this point, slots contain all required slots
+                                insertNode!( slots.slice(0, level), 0, {}, newNode, *newSlot, *return)
+                            }
+                        }
+                    }
+                }
+            }
+            |
+            // increase height if needed, slots appends for new levels
+            contract increaseHeight(@level, @slots, return) = {
+                for( @height <- maxHeightCh ){
+                    if( level > height ){
+                        maxHeightCh!(height + 1) |
+                        increaseHeight!(level, slots ++ [*headSlot], *return)
+                    } else {
+                        maxHeightCh!(height) |
+                        return!(slots)
+                    }
+                }
+            }
+            |
+            contract insertNode(@slots, @idx, @newLevelMap, @newNode, newSlot, return) = {
+                if( idx < slots.length() ){
+                    new slotCh, nextSlotCh, levelMapCh in {
+                        slotCh!(slots.nth(idx)) |
+                        for( slot <- slotCh ) {
+                            for( @node <- slot ){ // get the existing node
+                                levelMapCh!(node.get("l")) |
+                                for( @levelMap <- levelMapCh){ // get the existing level map
+                                    // first level is 1, so level = idx + 1
+                                    nextSlotCh!(levelMap.getOrElse(idx+1, Nil)) | // copy original next
+                                    for( @nextSlot <- nextSlotCh ) { // get original next slot
+                                        // update exiting node's level, pointing to current one
+                                        slot!(node.set("l", levelMap.set(idx+1, *newSlot))) |
+                                        // save the previous nextslot to newLevelmap, process to next one
+                                        insertNode!(slots, idx+1, newLevelMap.set( idx+1, nextSlot), newNode, *newSlot, *return)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    //stdout!(newNode.set("l", newLevelMap)) |
+                    newSlot!(newNode.set("l", newLevelMap)) |
+                    return!(newNode)
+                }
+            }
+            |
+            contract search(@score, return) = {
+                for( @level <<- maxHeightCh ){
+                    new ret in {
+                        searchLevel!( *headSlot, level, score, *ret) |
+                        for( slot <- ret ){
+                            if( *slot == Nil ){
+                                return!(Nil)
+                            }
+                            else {
+                                for(@node <<- slot) {
+                                    return!(node)
+                                }
+                            }
+                        }
+                    }
+                    
+                }
+            }
+            |
+            contract searchLevel(slot, @level, @score, return) = {
+                if(level > 0){
+                    //stdout!(*slot) |
+                    for( @node <<- slot){
+                        //stdout!(["searchLevel at level:", level, ",score:", score, ", ", node]) |
+                        new furthestSlotCh in {
+                            findFurthestSlot!(*slot, level, score, *furthestSlotCh)
+                            |
+                            for(@furthestSlot <- furthestSlotCh) {
+                                searchLevel!( furthestSlot, level-1, score, *return)
+                            }
+                        }
+                    }
+                } else {
+                    return!(*slot)
+                }
+            }
+            |
+            contract moveNext(@cursor, return) = {
+                
+                if( cursor != Nil ){
+                    new nextSlotCh in {
+                        //stdout!(cursor.get("l").get(1)) |
+                        nextSlotCh!(cursor.get("l").get(1)) |
+                        for( nextSlot <- nextSlotCh ){
+                            if( *nextSlot != Nil ){
+                                for( @nextNode <<- nextSlot ) {
+                                    return!(nextNode)
+                                }
+                            } else {
+                                return!(Nil)
+                            }
+                        }
+                    }
+                } else {
+                    return!(Nil)
+                }
+                    
+                
+            }
+        }
+    }
+    
+}
+

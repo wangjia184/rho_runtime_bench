@@ -1,0 +1,37 @@
+/*
+new somename, stdout(`rho:io:stdout`) in {
+    somename!(Nil) |
+    for(@x <- somename) {
+        if( x != Nil and x.get("something") > 0 ) {
+            stdout!("true")
+        } else {
+            stdout!("false")
+        }
+    }
+}
+*/
+
+/*
+new somename, stdout(`rho:io:stdout`) in {
+    somename!(Nil) |
+    for(@x <- somename) {
+        if( x != Nil ) {
+            if( x.get("something") > 0 ) {
+                stdout!("true")
+            } else {
+                stdout!("false")
+            }
+            
+        } else {
+            stdout!("false")
+        }
+    }
+}
+*/
+
+new numCh, stdout(`rho:io:stdout`) in {
+    numCh!(2414) |
+    for( @num <- numCh) {
+        stdout!(["Mod=", (num + 2) % num ])
+    }
+}

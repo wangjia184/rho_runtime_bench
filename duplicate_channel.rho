@@ -1,0 +1,13 @@
+new b, stdout(`rho:io:stdout`) in {
+    for (@num <- b) {
+        for( @x1 <- @{1+2}; @x2 <- @num ) {
+            stdout!(x1) |
+            stdout!(x2)
+        }
+    } |
+    b!(3) |
+    @3!(1111) |
+    @3!(2222)
+    
+
+}
