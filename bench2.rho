@@ -1,0 +1,12 @@
+new countCh, sumCh, stdout(`rho:io:stdout`) in {
+    countCh!(0) |
+    sumCh!(0) |
+    for( count <= countCh; sum <= sumCh ) {
+        if(*count < 100000) {
+            countCh!(*count + 1) |
+            sumCh!(*sum + *count + 1)
+        } else {
+            stdout!(*sum)
+        }
+    }
+}

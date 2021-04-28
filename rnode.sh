@@ -8,6 +8,7 @@ echo $CURRENT_DIR;
 
 sudo docker rm -f rnode
 sudo docker run -d --name rnode --rm \
+    --net=host \
     -p 40401:40401 \
     -p 40402:40402 \
     -p 40403:40403 \
