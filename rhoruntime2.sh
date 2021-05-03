@@ -5,4 +5,4 @@ echo $CURRENT_DIR;
 
 sudo docker run -ti --privileged \
     -v $CURRENT_DIR/bench2.rho:/source.rho \
-    wangjia184/rho_runtime:0.0.1 /source.rho
+    wangjia184/rho_runtime:0.0.2 /source.rho
